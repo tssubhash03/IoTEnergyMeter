@@ -1,46 +1,70 @@
 const express = require('express');
-const app = express();
-app.use(express.json());
-const cors = require('cors');
 const mongoose = require('mongoose');
-const dotenv = require('dotenv');
-const Reading = require('./models/Iot.models.js'); // Adjust the path as necessary
-const path = require('path');
-dotenv.config();
+const cors = require('cors');
 
-// Enable CORS
+const app = express();
+
 app.use(cors());
+app.use(express.json());
 
-// MongoDB connection with updated options to avoid deprecation warnings
-const mongoURI = process.env.MONGO_URL; // Ensure you have this in your .env file
-mongoose
-  .connect(mongoURI)
-  .then(() => {
-    console.log('Connected to MongoDB');
-  })
-  .catch((err) => {
-    console.error('Error connecting to MongoDB:', err);
-  });
-
-// Example route
-app.get('/', (req, res) => {
-  res.send('Backend is running!');
+// MongoDB connection
+mongoose.connect('mongodb://localhost:27017/espdata', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
 });
-app.post('/add-reading', async (req, res) => {
-    try {
-      const { voltage, current, time, date } = req.body;
-  
-      const reading = new Reading({ voltage, current, time, date });
-      await reading.save();
-  
-      res.status(201).json({ message: 'Reading saved', reading });
-    } catch (err) {
-        console.error('Error saving reading:', err);
-      res.status(500).json({ error: err.message });
-    }
-  });
-// Start the server
+
+const db = mongoose.connection;
+db.on('error', console.error.bind(console, 'MongoDB error:'));
+db.once('open', () => console.log('✅ Connected to MongoDB'));
+
+// Schema
+const DataSchema = new mongoose.Schema({
+  command: Number,
+  result: Number,
+  timestamp: { type: Date, default: Date.now }
+});
+const DataModel = mongoose.model('Data', DataSchema);
+
+// Variable to hold the latest command
+let latestCommand = null;
+
+// 1. Endpoint to receive command from frontend
+app.post('/set-command', (req, res) => {
+  const { command } = req.body;
+  latestCommand = command;
+  console.log("📥 Received command from frontend:", latestCommand);
+  res.json({ status: 'Command received' });
+});
+
+// 2. Endpoint ESP32 hits to get the latest command
+app.get('/get-command', (req, res) => {
+  res.send(latestCommand !== null ? latestCommand.toString() : '');
+});
+
+// 3. Endpoint ESP32 posts incremented value
+app.post('/esp-data', async (req, res) => {
+  const { sensorValue } = req.body;
+  console.log("📤 Received incremented value from ESP32:", sensorValue);
+
+  try {
+    const newData = new DataModel({
+      command: latestCommand,
+      result: sensorValue
+    });
+    await newData.save();
+    res.json({ status: 'Data saved' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to save data' });
+  }
+});
+
+// 4. Clear the command after processing
+app.post('/clear-command', (req, res) => {
+  latestCommand = null;
+  console.log("🧹 Cleared command");
+  res.json({ status: 'Command cleared' });
+});
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`🚀 Server running at http://localhost:${PORT}`);
 });
